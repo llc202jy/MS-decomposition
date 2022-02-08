@@ -1,0 +1,245 @@
+import igraph as ig  
+import leidenalg as la
+import numpy as np  # 入numpy模块
+from countNewMethod import *
+
+# 构建节点属性网络
+file = "Dynamic and static behavior characteristics data of entity methods.txt"  # 输入数据的路径
+G = ig.Graph(directed=True) 
+G.vs["name"] = None  
+with open(file, 'r') as File:
+    for line in File.readlines():  # 读取整个文件所有行，保存在 list 列表中
+        head, htime, tail, time, weight = [str(y) for y in line.split()]
+        if head not in G.vs["name"]:
+            G.add_vertex(head)  # 避免重复添加节点
+        if tail not in G.vs["name"]:
+            G.add_vertex(tail)  
+        if int(time)==0:
+            weight_w = int(weight) # 将节点属性网络G转化为加权网络Gw（静态行为特征数据
+        else:
+            weight_w = int(weight) * int(time)  # 将节点属性网络G转化为加权网络Gw（动态行为特征数据
+        G.add_edge(head, tail, weight=weight_w)
+
+
+
+
+# leiden算法
+partition = la.find_partition(G, la.ModularityVertexPartition, weights=G.es["weight"], n_iterations=2) 
+
+########################改进leiden算法产生的社区划分结果################################################
+Final_matrix = np.zeros(shape=(len(partition), len(partition)), dtype=int)  # 未加权，简单算法
+tempValue1 = []
+tempValue2 = []
+i = 0
+cross_edge = 0
+while i < len(partition):  # 第一个社区
+    tempValue1.extend(partition[i])
+    j = i + 1  # 每次循环开始重新赋值
+    while j < len(partition):  # 第二个社区
+        tempValue2.extend(partition[j])
+        for data in edge:  # 边集合
+            if (data[0] in tempValue1 and data[1] in tempValue2) or (data[1] in tempValue1 and data[0] in tempValue2):
+                cross_edge = cross_edge + 1
+        Final_matrix[i][j] = cross_edge  # 两个社区存在的关联边的数量
+        Final_matrix[j][i] = cross_edge
+        j += 1
+        cross_edge = 0  # 每次循环开始，关联边数量为0
+        tempValue2[:] = []
+    i += 1
+    tempValue1[:] = []
+print("社区联系矩阵：", Final_matrix)
+
+#k_partition = KMeans(n_clusters=3, random_state=1).fit(Final_matrix)  # 只输入需要划分的属性数值,random_state=1
+#print("kMeans划分社区联系矩阵：", k_partition.labels_)
+
+#############提出的聚类算法（参考层次聚类）###################################
+Final_Partition=[]#最终的聚类结果存储
+#最终的微服务个数，可自由设定
+cluster_n=4
+#处理孤立的社区，合并成一个新的社区
+allZero=np.where(Final_matrix.any(axis=0)==False)#any()函数中若axis=0则表示按列进行查找，若全列为0，则返回false;b==False 是python中对布尔型数据取反的操作
+mergeIndex=np.where(Final_matrix.any(axis=0))#将要进行合并的社区下标
+if len(allZero)!=0:         #如果存在全0列，也就是存在孤立的社区，将其合并为一个新的社区，存放在最终结果列表中
+    Final_Partition.append(list(allZero[0]))
+    merge_n=cluster_n-1
+    #处理关联关系矩阵，删除孤立的社区
+    nF_matrix=np.delete(Final_matrix, allZero, axis=1)        #删除全为0的列
+    newFinal_matrix=np.delete(nF_matrix, allZero, axis=0)        #再删除全为0的行，获得最终的关联矩阵
+else:
+    merge_n=cluster_n   #不存在孤立的社区
+    newFinal_matrix=[]
+#开始进行社区合并，两两合并具有最大关联边的社区，只看上三角矩阵，不允许重叠，若重叠，具有关联数量多的保留，若数量相同，则社区个数少的保留，若社区个数也相同，则先来后到原则；若出现子集，则舍去
+
+def optimizePartition(community):
+    i = 0  # 标记初步划分结果的社区索引
+    compare_partition = []  # 检查比较后得到的初步最优结果
+    while i < len(community):
+        temp_community = community[i]  # 比较之后较优的社区
+        j = 0   #跟除自身以外其他所有列比较
+        while j < len(community):
+            if i!=j:
+                if len(list(set(community[i]) & set(community[j]))) != 0:  # 如果存在交集，则判断当前哪个社区的关联边更大
+                    count_t = CountJC(temp_community, Final_matrix)  # 当前社区a内部关联边数量
+                    count_j = CountJC(community[j], Final_matrix)  # 当前社区j内部关联边数量
+                    temp_community = CompareJC(temp_community, community[j], count_t, count_j)  # 确定更优社区;# 初步合并结果中每个社区对应的最优社区
+            j = j + 1
+        if judgeRepeat(compare_partition, temp_community):
+            compare_partition.append(temp_community)  # 确定初步合并后的第i个社区对应的最优社区
+        i = i + 1  # 遍历下一个社区
+    list_lenth = len(set(sum(compare_partition, []))) # 当前划分结果去除重复以后所含元素个数
+    if len(sum(compare_partition, []))==list_lenth:    #若当前非交集个数与去重以后标记一致，即当前划分的社区彼此之间再无交集
+        return compare_partition
+    else:
+        return optimizePartition(compare_partition)
+
+#创建新的矩阵对应的社区划分结果列表
+def creatNewPartition(oldPartition, newPartition):
+    newList = sum(newPartition, [])  # 将划分结果变为一维列表社区
+    tempOldPartition = oldPartition.copy()  # 用新的一模一样的数据进行遍历，然后在旧的上删除
+    for ele in newList:
+        for listj in tempOldPartition:
+            if ele in listj:
+                if listj in oldPartition:
+                    oldPartition.remove(listj)
+    newPartition.extend(oldPartition)
+    if len(sum(newPartition, [])) != len(list(mergeIndex[0])):
+        for i in mergeIndex[0]:
+            if i not in sum(newPartition, []):
+                newPartition.append([i])
+    return newPartition
+
+def creatNewMatrix(newPartition, matrix):   #最新一轮的输入结果，最新一轮的合并结果，以及原始的关联矩阵
+    newMatrix=np.zeros(shape=(len(newPartition), len(newPartition)), dtype=int)
+    i = 0
+    cross_e = 0
+    while i < len(newPartition):  # 第一个社区
+        j = i + 1  # 每次循环开始重新赋值
+        while j < len(newPartition):  # 第二个社区
+            for data_i in newPartition[i]:
+                for data_j in newPartition[j]:
+                    cross_e=cross_e+matrix[data_i, data_j]
+            newMatrix[i][j] = cross_e  # 两个社区存在的关联
+            newMatrix[j][i] = cross_e
+            j += 1
+            cross_e = 0  # 每次循环开始，关联数量为0
+        i += 1
+    return newMatrix, newPartition
+
+######执行核心算法
+def mergenewFinal(matrix, n, partition_matrix):    #matrix为关联矩阵，n为聚类簇数，该函数返回最后的划分结果
+    out_partition_new = []  # 每次合并结束时的输出社区
+    in_partition = []  # 每次合并时的输入社区
+    merge_partition=[]
+    tempGuodu=[]
+    ###根据关联矩阵，获得初步的合并结果
+    if partition_matrix == []:
+        for fac in mergeIndex[0]:
+            partition_matrix.append([fac])
+    row=0
+    col_sum = matrix.shape[0]
+    while row< col_sum:     #遍历行，进行合并
+        col = row + 1  
+        if np.sum(matrix[row,col:col_sum])==0:  #如果当前行全为0，则将该行单独作为一个社区
+            out_partition_new.append(partition_matrix[row])
+        else:
+            col=countBestIndex(partition_matrix, matrix, row)    #返回关联矩阵的当前行中关联边数量最大的列的下标
+            tempGuodu.extend(partition_matrix[row])
+            tempGuodu.extend(partition_matrix[col])
+            out_partition_new.append(tempGuodu[:]) #存储当前合并的两个社区
+            tempGuodu=[]
+        row=row+1   #读取下一行
+    ######对生成的社区结果进行去重叠，择最优社区操作，获得优化后的结果
+    noSubPartition=deleteSubset(out_partition_new)  #去除子集
+    new=optimizePartition(noSubPartition)   #一轮结果的最优社区合并的输出
+    in_partition.extend(partition_matrix)
+    merge_partition.extend(new)
+    update_merge_partition= creatNewPartition(in_partition, merge_partition)
+    if len(update_merge_partition)==n :     #若达到聚类簇数
+        return merge_partition
+    else:
+        newMatrix, partition_matrix = creatNewMatrix(merge_partition, Final_matrix)    #一轮结果对应的关联矩阵
+        return mergenewFinal(newMatrix, n, partition_matrix)
+
+#############执行算法，产生最终的微服务候选
+partititon_matrix=[]
+if merge_n==cluster_n:
+    Final_Partition.extend(mergenewFinal(Final_matrix, merge_n, partititon_matrix))    #初始的关联矩阵不存在全0列
+    print(Final_Partition)
+else:
+    Final_Partition.extend(mergenewFinal(newFinal_matrix, merge_n, partititon_matrix))#初始的关联矩阵存在全0列
+    print(Final_Partition)
+
+
+
+*********************调用函数
+##统计社区内部关联边数量的函数
+def CountJC(community, jcha_matrix): #统计当前社区内部的关联边数量
+    i=0#遍历社区
+    jcha_num=0#社区内部的关联边数量
+    while i<len(community):
+        j=i+1
+        while j<len(community):
+            jcha_num=jcha_num+jcha_matrix[community[i],community[j]]
+            j=j+1
+        i=i+1
+    return jcha_num     #返回当前社区内部的关联边数量
+
+
+###删除子集函数
+def deleteSubset(community):#去除子集后的社区划分结果
+    shanchu_Community=[]
+    shanchu_Community.extend(community) #保留删除子集后的社区
+    i=0
+    while i<len(community):
+        j=i+1
+        while j<len(community):
+            if set(community[i]).issubset(set(community[j])):  # 若i是j的子集
+                if community[j] in shanchu_Community:
+                    shanchu_Community.remove(community[i])  # 直接在原集合删除i
+            else:
+                if set(community[j]).issubset(set(community[i])):  # 若j是i的子集
+                    if community[j] in shanchu_Community:
+                        shanchu_Community.remove(community[j])  # 直接在原集合删除j
+            j=j+1
+        i=i+1
+    return shanchu_Community
+
+##比较两个社区更优的函数
+def CompareJC(community_a, community_b, count_a, count_b):
+    a_lenth=len(community_a)#a社区包含的原始社区个数
+    b_lenth=len(community_b)#b社区包含的原始社区个数
+    if count_a>count_b: #a社区内部的关联边数量大于b的
+        return community_a#返回社区a
+    else:
+        if count_a==count_b:    #在关联数量相同的情况下
+            if a_lenth<= b_lenth:#若a内部的原始社区个数小于等于b的
+                return community_a#返回社区a
+            else:
+                return community_b
+        else:   #在a社区内部的关联边数量小于b的情况
+            return community_b
+
+###判断重复的函数
+def judgeRepeat(communityA, communityB):
+    i=0
+    while i<len(communityA):
+        if set(communityB).issubset(set(communityA[i])):  # 若communityB是communityA的子集
+            return False
+        i += 1
+    return True
+
+##计算当前行的最佳合并社区
+def countBestIndex(community_partition, community_matrix, row):
+    j=row+1
+    bestCount=0#当前行的最大关联边数
+    bestIndex=0#当前行最大关联边数对应的列的下标
+    while j<len(community_partition):
+        if community_matrix[row][j]>bestCount:  #若存在更大的关联边
+            bestCount = community_matrix[row][j]
+            bestIndex = j
+        else:
+            if community_matrix[row][j]==bestCount:  #若存在更大的关联边
+                if len(community_partition[j])< len(community_partition[bestIndex]):
+                    bestIndex = j
+        j=j+1
+    return bestIndex
