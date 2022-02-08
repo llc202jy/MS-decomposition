@@ -1,1 +1,1 @@
-# MS-decomposition
+The experimental dataset folder illustrate the input code of the proposed method, the results of static and dynamic analysis and the node-attributed network built. The experimental results folder show the final microservices decomposition.
